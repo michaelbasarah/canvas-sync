@@ -1,0 +1,31 @@
+{
+  "host": "canvas.cityu.edu.hk",
+  "cookie_profile": "~/.canvas-chrome-profile",
+  "data_root": "~/personal/learning",
+  "chrome_path": null,
+
+  "terms": [
+    {
+      "id": 347,
+      "dir": "2026A",
+      "courses": {
+        "MNE3007": "MNE3007-CAD-CAM",
+        "MNE3046": "MNE3046-Automation-Technology",
+        "SYE3101": "SYE3101-Risk-Engineering",
+        "SYE4003": "SYE4003-AI-Adv-Manufacturing",
+        "GE2340": "GE2340-AI-Past-Present-Future"
+      }
+    }
+  ],
+
+  "folder_routes": { "project": "project", "lecture": "lectures" },
+  "name_routes": [
+    ["lab", "labs"],
+    ["schedule|outline|syllabus", "admin"],
+    ["^mne3007(_web)?\\.pdf$", "admin/course-site"],
+    ["\\.(html?|jpe?g|png|gif)$", "admin/course-site"],
+    ["c programming", "labs"],
+    ["walkie-talkie", "reference"]
+  ],
+  "default_folder": "lectures"
+}

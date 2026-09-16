@@ -1,0 +1,6 @@
+*.log
+_logs/
+*.part
+.env
+cookies*
+__pycache__/
