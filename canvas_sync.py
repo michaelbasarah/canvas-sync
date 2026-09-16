@@ -159,7 +159,8 @@ def sync_files(log, jar, host, cfg, course, cdir):
         if '.' not in name:
             name += EXT.get(f.get('content-type'),
                             mimetypes.guess_extension(f.get('content-type') or '') or '')
-        dest = os.path.join(cdir, route(cfg, name, folders.get(f['folder_id'])))
+        dest_dir = os.path.join(cdir, route(cfg, name, folders.get(f['folder_id'])))
+        dest = os.path.join(dest_dir, name)
         sz = f.get('size')
         if sz is not None and os.path.exists(dest) and os.path.getsize(dest) == sz:
             continue
