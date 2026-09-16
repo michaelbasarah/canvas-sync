@@ -24,7 +24,7 @@ import argparse, glob, json, mimetypes, os, re, shutil, sqlite3, subprocess
 import sys, tempfile, time
 from datetime import datetime
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))   # realpath: works through symlinks
 
 EXT = {'application/pdf': '.pdf', 'application/zip': '.zip', 'text/html': '.html',
        'image/jpeg': '.jpg',
