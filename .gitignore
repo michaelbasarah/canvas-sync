@@ -4,3 +4,8 @@ _logs/
 .env
 cookies*
 __pycache__/
+# Canvas access tokens live in ~/.config/canvas-sync/token — never in the repo
+token
+*.token
+*token*.txt
+.canvas-token*

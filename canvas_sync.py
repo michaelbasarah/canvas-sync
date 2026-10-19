@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Sync Canvas course files + assignments into a local folder tree.
 
-Auth is a session cookie read straight out of a local Chromium profile
-(default ~/.canvas-chrome-profile), so no browser has to be running for the
-sync itself. When the session expires, log in once in that profile:
+Auth is a Canvas personal access token (Account > Settings > Approved
+Integrations > New Access Token), sent as `Authorization: Bearer`. It is read
+from $CANVAS_TOKEN or ~/.config/canvas-sync/token (chmod 600; override the
+path with "token_file" in config.json) -- never from config.json itself.
+
+Fallback: a session cookie read straight out of a local Chromium profile
+(default ~/.canvas-chrome-profile). When that session expires, log in once:
 
     python3 canvas_sync.py --login     # opens the profile browser
     # ...sign in with SSO + 2FA, close the browser...
@@ -16,9 +20,10 @@ Data layout (under data_root from config.json):
 
 Files already on disk with the same size are skipped, so re-running is cheap
 and daily automation is safe. Exit codes: 0 = ok (even if nothing new),
-3 = Canvas session expired.
+3 = no working auth (token rejected/missing and cookie session expired).
 
-Requirements: python3, the `cryptography` package, curl, any Chromium.
+Requirements: python3, curl, a Canvas access token. Cookie fallback only:
+the `cryptography` package and any Chromium.
 """
 import argparse, glob, json, mimetypes, os, re, shutil, sqlite3, subprocess
 import sys, tempfile, time
@@ -50,6 +55,16 @@ def do_login(cfg):
     print(f'opening {chrome} — sign in, then close the browser')
     os.execv(chrome, [chrome, f"--user-data-dir={cfg['cookie_profile']}",
                       f"https://{cfg['host']}/"])
+
+
+def load_token(cfg):
+    """Personal access token from $CANVAS_TOKEN or the token file, else None."""
+    tok = os.environ.get('CANVAS_TOKEN')
+    if not tok:
+        path = os.path.expanduser(cfg.get('token_file', '~/.config/canvas-sync/token'))
+        if os.path.exists(path):
+            with open(path) as f: tok = f.read()
+    return (tok or '').strip() or None
 
 
 def cookie_jar(host, profile):
@@ -93,12 +108,12 @@ def cookie_jar(host, profile):
     return jar
 
 
-def api(jar, host, url_or_path):
+def api(sess, host, url_or_path):
     """GET one Canvas API page -> (parsed json, next-page url or None)."""
     url = url_or_path if url_or_path.startswith('http') \
         else f"https://{host}/api/v1/{url_or_path}"
     hdr = tempfile.mktemp()
-    r = subprocess.run(['curl', '-gsS', '-b', jar, '-L', '-D', hdr,
+    r = subprocess.run(['curl', '-gsS'] + auth_args(sess) + ['-L', '-D', hdr,
                         '-H', 'Accept: application/json', url],
                        capture_output=True, text=True)
     body = re.sub(r'^while\(1\);', '', r.stdout)
@@ -113,22 +128,29 @@ def api(jar, host, url_or_path):
     return data, nxt
 
 
-def pages(jar, host, path):
+def auth_args(sess):
+    """curl args that authenticate: Bearer token if one is configured, else cookies."""
+    if sess.get('token'):
+        return ['-H', f"Authorization: Bearer {sess['token']}"]
+    return ['-b', sess['jar']]
+
+
+def pages(sess, host, path):
     """Walk every page of a paginated Canvas API endpoint."""
     out, url = [], path
     for _ in range(50):                        # hard cap: 50 pages = 5000 items
-        data, url = api(jar, host, url)
+        data, url = api(sess, host, url)
         if not isinstance(data, list): break
         out += data
         if not url: break
     return out
 
 
-def download(jar, url, dest):
+def download(sess, url, dest):
     """Fetch to dest.part, rename into place only on HTTP 200."""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + '.part'
-    r = subprocess.run(['curl', '-gsS', '-b', jar, '-L', '-o', tmp,
+    r = subprocess.run(['curl', '-gsS'] + auth_args(sess) + ['-L', '-o', tmp,
                         '-w', '%{http_code}', url], capture_output=True, text=True)
     if r.stdout.strip() == '200':
         os.replace(tmp, dest)
@@ -147,10 +169,10 @@ def route(cfg, name, canvas_folder):
     return cfg['default_folder']
 
 
-def sync_files(log, jar, host, cfg, course, cdir):
+def sync_files(log, sess, host, cfg, course, cdir):
     folders = {f['id']: f['full_name']
-               for f in pages(jar, host, f"courses/{course['id']}/folders?per_page=100")}
-    files = pages(jar, host, f"courses/{course['id']}/files?per_page=100")
+               for f in pages(sess, host, f"courses/{course['id']}/folders?per_page=100")}
+    files = pages(sess, host, f"courses/{course['id']}/files?per_page=100")
     if not isinstance(files, list): return 0, 0
     new = fail = 0
     for f in files:
@@ -165,16 +187,16 @@ def sync_files(log, jar, host, cfg, course, cdir):
         if sz is not None and os.path.exists(dest) and os.path.getsize(dest) == sz:
             continue
         rel = os.path.relpath(dest, cdir)
-        if download(jar, f['url'], dest):
+        if download(sess, f['url'], dest):
             log(f"NEW  {os.path.basename(cdir)}/{rel}"); new += 1
         else:
             log(f"FAIL {os.path.basename(cdir)}/{rel}"); fail += 1
     return new, fail
 
 
-def sync_assignments(log, jar, host, course, cdir, state):
+def sync_assignments(log, sess, host, course, cdir, state):
     cid = course['id']
-    items = pages(jar, host, f'courses/{cid}/assignments?per_page=100&include[]=submission')
+    items = pages(sess, host, f'courses/{cid}/assignments?per_page=100&include[]=submission')
     if not isinstance(items, list): return 0
     now = datetime.now().astimezone()
     known = state.setdefault(f'asg-{cid}', {})
@@ -228,18 +250,6 @@ def main():
     host = cfg['host']
     if args.login: do_login(cfg)
 
-    jar = cookie_jar(host, cfg['cookie_profile'])
-    if args.list_courses:
-        for c in pages(jar, host, 'courses?enrollment_state=active&per_page=100'):
-            print(f"{c.get('enrollment_term_id')}\t{c['id']}\t"
-                  f"{re.sub(r'^.*/', '', c.get('course_code', ''))[:12]:12}\t{c.get('name')}")
-        return
-
-    courses = pages(jar, host, 'courses?enrollment_state=active&per_page=100')
-    if not isinstance(courses, list) or not courses:
-        print('Canvas session expired — run: python3 canvas_sync.py --login')
-        sys.exit(3)
-
     root = cfg['data_root']
     os.makedirs(os.path.join(root, '_logs'), exist_ok=True)
     logpath = os.path.join(root, '_logs', time.strftime('sync-%Y%m.log'))
@@ -248,10 +258,42 @@ def main():
         print(msg)
         with open(logpath, 'a') as f: f.write(msg + '\n')
 
+    # Token first; the browser cookie is only a fallback.
+    listing = 'courses?enrollment_state=active&per_page=100'
+    courses, notes = [], []
+    token = load_token(cfg)
+    if token:
+        sess = {'token': token, 'jar': None}
+        courses = pages(sess, host, listing)
+        if not courses: notes.append('token rejected (expired or revoked?)')
+    else:
+        notes.append('no token file')
+    if not courses:
+        try:
+            sess = {'token': None, 'jar': cookie_jar(host, cfg['cookie_profile'])}
+            courses = pages(sess, host, listing)
+            if courses: notes.append('using cookie fallback')
+        except Exception as e:
+            notes.append(f'cookie fallback unavailable ({type(e).__name__})')
+    if not courses:
+        # Logged so failed scheduled runs show up in _logs/ instead of vanishing.
+        log(f'== {time.strftime("%Y-%m-%d %H:%M")} ==')
+        log(f'!! AUTH FAILED: {"; ".join(notes)}; no working cookie session either. '
+            'Renew the token (Canvas > Account > Settings > Approved Integrations) '
+            'into ~/.config/canvas-sync/token, or run --login.')
+        sys.exit(3)
+
+    if args.list_courses:
+        for c in courses:
+            print(f"{c.get('enrollment_term_id')}\t{c['id']}\t"
+                  f"{re.sub(r'^.*/', '', c.get('course_code', ''))[:12]:12}\t{c.get('name')}")
+        return
+
     state_path = os.path.join(root, '.sync-state.json')
     state = json.load(open(state_path)) if os.path.exists(state_path) else {}
 
     log(f'== {time.strftime("%Y-%m-%d %H:%M")} ==')
+    for n_ in notes: log(f'!! {n_}')
     new = fail = chg = 0
     for term in cfg['terms']:
         for c in courses:
@@ -264,8 +306,8 @@ def main():
                     f'(filing under {code})')
                 folder = code or f"course-{c['id']}"
             cdir = os.path.join(root, term['dir'], folder)
-            n, fl = sync_files(log, jar, host, cfg, c, cdir)
-            ch = sync_assignments(log, jar, host, c, cdir, state)
+            n, fl = sync_files(log, sess, host, cfg, c, cdir)
+            ch = sync_assignments(log, sess, host, c, cdir, state)
             new, fail, chg = new + n, fail + fl, chg + ch
     json.dump(state, open(state_path, 'w'), indent=1, sort_keys=True)
     log(f'-- {new} new file(s), {chg} assignment change(s), {fail} failure(s)')

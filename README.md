@@ -33,27 +33,36 @@ re-running is cheap and scheduling it daily is safe.
 
 ## How it works
 
-No API token needed. The script reads the Canvas session cookie straight out of
-a dedicated local Chromium profile (`~/.canvas-chrome-profile`), decrypts it
-with Chromium's fixed Linux key, and talks to the ordinary Canvas REST API
-(`/api/v1/courses`, `/files`, `/folders`, `/assignments`). That profile exists
-only for Canvas — log into it once and the cookie lasts a few weeks.
-
-When it expires, the run exits with code 3 and the log says so:
+Auth is a Canvas **personal access token** (Account → Settings → Approved
+Integrations → **+ New Access Token**), sent as `Authorization: Bearer <token>`
+to the ordinary Canvas REST API (`/api/v1/courses`, `/files`, `/folders`,
+`/assignments`). The token is read from `$CANVAS_TOKEN` or
+`~/.config/canvas-sync/token` (path overridable via `token_file` in
+`config.json`), never from `config.json` itself:
 
 ```bash
-python3 canvas_sync.py --login    # opens the profile browser
-                                  # sign in (SSO + 2FA), close it, done
+mkdir -p ~/.config/canvas-sync
+(umask 077; read -rsp 'Token: ' t && printf %s "$t" > ~/.config/canvas-sync/token)
 ```
+
+**Fallback:** if there's no token or Canvas rejects it, the script reads the
+session cookie straight out of a dedicated local Chromium profile
+(`~/.canvas-chrome-profile`), decrypted with Chromium's fixed Linux key. Log
+into that profile once with `python3 canvas_sync.py --login` (SSO + 2FA, then
+close the browser).
+
+If neither works, the run writes `!! AUTH FAILED` to the log and exits with
+code 3. Renew the token (or `--login`) and re-run.
 
 ## Setup
 
-python3, `cryptography` (`pip install cryptography` or `apt install
-python3-cryptography`), `curl`, and any Chromium.
+python3, `curl`, and a Canvas access token. For the cookie fallback only:
+`cryptography` (`pip install cryptography` or `apt install
+python3-cryptography`) and any Chromium.
 
 ```bash
 git clone https://github.com/michaelbasarah/canvas-sync && cd canvas-sync
-python3 canvas_sync.py --login          # once — sign in, close the browser
+# save your Canvas access token to ~/.config/canvas-sync/token (see above)
 python3 canvas_sync.py --list-courses   # term ids + course codes, for config.json
 $EDITOR config.json                     # host, term, course -> folder names
 python3 canvas_sync.py
@@ -85,9 +94,10 @@ or asleep at 18:30, the run happens at the next boot instead of being skipped.
 
 The synced materials. Lecture slides and assignment briefs belong to the
 lecturers, so this repo ships the tool only — downloads land in `data_root`
-(default `~/personal/learning`), which is not a git repo. No cookies or
-session tokens ever enter the repo either; they stay inside the browser
-profile.
+(default `~/personal/learning`), which is not a git repo. No tokens or
+cookies ever enter the repo either: the access token lives in
+`~/.config/canvas-sync/token` (mode 600), cookies inside the browser profile,
+and `.gitignore` blocks token-looking files as a backstop.
 
 ## Also here
 
