@@ -175,7 +175,8 @@ def sync_files(log, sess, host, cfg, course, cdir):
     files = pages(sess, host, f"courses/{course['id']}/files?per_page=100")
     if not isinstance(files, list): return 0, 0
     new = fail = 0
-    for f in files:
+    seen = set()
+    for f in sorted(files, key=lambda f: f['id']):   # stable order -> stable names
         if not f.get('url'): continue
         name = f['display_name']
         if '.' not in name:
@@ -183,6 +184,10 @@ def sync_files(log, sess, host, cfg, course, cdir):
                             mimetypes.guess_extension(f.get('content-type') or '') or '')
         dest_dir = os.path.join(cdir, route(cfg, name, folders.get(f['folder_id'])))
         dest = os.path.join(dest_dir, name)
+        if dest in seen:                       # same name twice in one course: suffix the later id
+            stem, ext = os.path.splitext(name)
+            dest = os.path.join(dest_dir, f"{stem}-{f['id']}{ext}")
+        seen.add(dest)
         sz = f.get('size')
         if sz is not None and os.path.exists(dest) and os.path.getsize(dest) == sz:
             continue
